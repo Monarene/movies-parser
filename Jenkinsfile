@@ -13,17 +13,17 @@ node(''){
         parallel(
             'Quality Tests': {
                 imageTest.inside{
-                    sh 'Quality tests'
+                    sh 'echo "Quality tests"'
                 }
             },
             'Unit Tests': {
                 imageTest.inside{
-                    sh 'Unit test'
+                    sh 'echo "Unit test"'
                 }
             },
             'Security Tests': {
                 imageTest.inside{
-                    sh 'Security tests'
+                    sh 'echo "Security tests"'
                 }
             }
         )
