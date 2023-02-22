@@ -13,7 +13,12 @@ node(''){
 
     stage('Unit Tests'){
         imageTest.inside{
-        sh 'go test'} 
+        sh 'this is a go test'} 
+        }
+
+    stage('Security Checks'){
+        imageTest.inside{
+        sh 'this is a security check with nancy'} 
         }
 
 }
