@@ -1,5 +1,5 @@
 def imageName = 'mlabouardy/movies-parser'
-def myImageName = 'monarene/movies-parser'
+def myImageName = 'monarene/movie-parser'
 
 node(''){
     stage('Checkout'){
