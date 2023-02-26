@@ -1,6 +1,6 @@
 FROM golang:1.16.5
 WORKDIR /go/src/github.com/mlabouardy/movies-parser
-COPY main.go go.mod .
+COPY main.go go.mod ./
 RUN go get -v
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app main.go
 
