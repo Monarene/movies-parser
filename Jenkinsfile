@@ -1,4 +1,5 @@
 def imageName = 'mlabouardy/movies-parser'
+def myImageName = 'monarene/movies-parser'
 
 node(''){
     stage('Checkout'){
@@ -30,7 +31,27 @@ node(''){
     }
 
     stage('Build'){
-        docker.build(imageName)
+        dockerImage = docker.build(myImageName)
+    }
+
+    stage('Push'){
+        withDockerRegistry([credentialsId: "dockerhub", url: "" ]) {
+        dockerImage.push(commitID())
+        
+        if (env.BRANCH_NAME == 'develop') {
+            dockerImage.push('develop')
+        }
+        
+        }
+        
     }
 
 }
+
+def commitID() {
+    sh 'git rev-parse HEAD > .git/commitID'
+    def commitID = readFile('.git/commitID').trim()
+    sh 'rm .git/commitID'
+    commitID
+}
+
