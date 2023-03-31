@@ -3,27 +3,25 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	lambdaRegistrator "github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/external"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 type Movie struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Poster      string    `json:"poster"`
-	ReleaseDate string    `json:"releaseDate" bson:"releaseDate"`
+	ReleaseDate string    `json:"releaseDate"`
 	Rating      string    `json:"rating"`
 	Genre       string    `json:"genre"`
 	Description string    `json:"description"`
@@ -42,6 +40,20 @@ type Actor struct {
 	Picture string `json:"picture"`
 	Name    string `json:"name"`
 	Role    string `json:"role"`
+}
+
+type Input struct {
+	Title string `json:"title"`
+	Rank  string `json:"rank"`
+	ID    string `json:"id"`
+}
+
+type Event struct {
+	Records []Record `json:"Records"`
+}
+
+type Record struct {
+	Body string `json:"Body"`
 }
 
 func ParseMovie(movieHTML string) (Movie, error) {
@@ -95,71 +107,89 @@ func ParseMovie(movieHTML string) (Movie, error) {
 	return movie, nil
 }
 
-func main() {
-	mongoDBClient, err := mongo.Connect(context.Background(), options.Client().ApplyURI(os.Getenv("MONGO_URI")))
+func format(payload interface{}) string {
+	response, _ := json.Marshal(payload)
+	return string(response)
+}
+
+func handler(event Event) error {
+	cfg, err := external.LoadDefaultAWSConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	collection := mongoDBClient.Database(os.Getenv("MONGO_DATABASE")).Collection("movies")
 
 	httpClient := &http.Client{}
+	dynamodbClient := dynamodb.New(cfg)
 
-	cfg, _ := external.LoadDefaultAWSConfig()
-	sqsClient := sqs.New(cfg)
+	for _, record := range event.Records {
+		input := Input{}
+		json.Unmarshal([]byte(record.Body), &input)
 
-	cfg.Region = os.Getenv("AWS_REGION")
-
-	for {
-		req := sqsClient.ReceiveMessageRequest(&sqs.ReceiveMessageInput{
-			QueueUrl: aws.String(os.Getenv("SQS_URL")),
-		})
-		respSQS, err := req.Send(context.Background())
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		rawMovie := Movie{}
-		json.Unmarshal([]byte(*respSQS.Messages[0].Body), &rawMovie)
-
-		url := fmt.Sprintf("https://www.imdb.com/title/%s", rawMovie.ID)
+		url := fmt.Sprintf("https://www.imdb.com/title/%s", input.ID)
 		reqHttp, err := http.NewRequest("GET", url, nil)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		reqHttp.Header.Add("Accept-Language", "en-us")
 
 		respHttp, err := httpClient.Do(reqHttp)
 		defer respHttp.Body.Close()
 		if respHttp.StatusCode != 200 {
-			log.Fatalf("status code error: %d %s", respHttp.StatusCode, respHttp.Status)
+			return errors.New(fmt.Sprintf("status code error: %d %s", respHttp.StatusCode, respHttp.Status))
 		}
 
 		data, _ := ioutil.ReadAll(respHttp.Body)
 
 		movie, err := ParseMovie(string(data))
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
-		movie.Rank = rawMovie.Rank
-		movie.ID = rawMovie.ID
+		movie.ID = input.ID
+		movie.Rank = input.Rank
 
-		log.Println(movie.Title)
-
-		_, err = collection.InsertOne(context.Background(), movie)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		reqDeleteMessage := sqsClient.DeleteMessageRequest(&sqs.DeleteMessageInput{
-			QueueUrl:      aws.String(os.Getenv("SQS_URL")),
-			ReceiptHandle: respSQS.Messages[0].ReceiptHandle,
+		reqPutItem := dynamodbClient.PutItemRequest(&dynamodb.PutItemInput{
+			TableName: aws.String(os.Getenv("TABLE_NAME")),
+			Item: map[string]dynamodb.AttributeValue{
+				"id": dynamodb.AttributeValue{
+					S: aws.String(movie.ID),
+				},
+				"title": dynamodb.AttributeValue{
+					S: aws.String(movie.Title),
+				},
+				"rating": dynamodb.AttributeValue{
+					S: aws.String(movie.Rating),
+				},
+				"rank": dynamodb.AttributeValue{
+					S: aws.String(movie.Rank),
+				},
+				"poster": dynamodb.AttributeValue{
+					S: aws.String(movie.Poster),
+				},
+				"description": dynamodb.AttributeValue{
+					S: aws.String(movie.Description),
+				},
+				"releaseDate": dynamodb.AttributeValue{
+					S: aws.String(movie.ReleaseDate),
+				},
+				"actors": dynamodb.AttributeValue{
+					S: aws.String(format(movie.Actors)),
+				},
+				"videos": dynamodb.AttributeValue{
+					S: aws.String(format(movie.Videos)),
+				},
+				"similar": dynamodb.AttributeValue{
+					S: aws.String(format(movie.Similar)),
+				},
+			},
 		})
-		_, err = reqDeleteMessage.Send(context.Background())
+		_, err = reqPutItem.Send(context.Background())
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
-		time.Sleep(6 * time.Second)
 	}
-}
 
-// This is a test
+	return nil
+}
+func main() {
+	lambdaRegistrator.Start(handler)
+}

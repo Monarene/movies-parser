@@ -1,63 +1,66 @@
+def functionName = 'MoviesParser'
 def imageName = 'mlabouardy/movies-parser'
-def myImageName = 'monarene/movie-parser'
+def bucket = 'deployment-packages-watchlist'
+def region = 'eu-west-3'
 
-node(''){
-
-    try {
-
-    stage('Checkout'){
-        checkout scm
-    }
-
-    def imageTest= docker.build("${imageName}-test", "-f Dockerfile.test .")
-
-
-    
-    stage('Pre-integration Tests'){
-        parallel(
-            'Quality Tests': {
-                imageTest.inside{
-                    sh 'echo "Quality tests"'
-                }
-            },
-            'Unit Tests': {
-                imageTest.inside{
-                    sh 'echo "Unit test"'
-                }
-            },
-            'Security Tests': {
-                imageTest.inside{
-                    sh 'echo "Security tests"'
-                }
-            }
-        )
-    }
-
-    stage('Build'){
-        dockerImage = docker.build(myImageName)
-    }
-
-    stage('Push'){
-        withDockerRegistry([credentialsId: "dockerhub", url: "" ]) {
-        dockerImage.push(commitID())
-        
-        if (env.BRANCH_NAME == 'develop') {
-            dockerImage.push('develop')
+node('workers'){
+    try{
+        stage('Checkout'){
+            checkout scm
+            notifySlack('STARTED')
         }
-        
-        }
-        
-    }
 
-     } 
-    catch(e){
+        def imageTest= docker.build("${imageName}-test", "-f Dockerfile.test .")
+
+        stage('Pre-integration Tests'){
+            parallel(
+                'Quality Tests': {
+                    imageTest.inside{
+                        sh 'golint'
+                    }
+                },
+                'Unit Tests': {
+                    imageTest.inside{
+                        sh 'go test'
+                    }
+                },
+                'Security Tests': {
+                    imageTest.inside('-u root:root'){
+                        sh 'nancy /go/src/github/mlabouardy/movies-parser/Gopkg.lock'
+                    }
+                }
+            )
+        }
+
+        stage('Build'){
+            sh """
+                docker build -t ${imageName} .
+                containerName=\$(docker run -d ${imageName})
+                docker cp \$containerName:/go/src/github.com/mlabouardy/movies-parser/main main
+                docker rm -f \$containerName
+                zip -r ${commitID()}.zip main
+            """
+        }
+
+        stage('Push'){
+            sh "aws s3 cp ${commitID()}.zip s3://${bucket}/${functionName}/"
+        }
+
+        stage('Deploy'){
+            sh "aws lambda update-function-code --function-name ${functionName} \
+                    --s3-bucket ${bucket} --s3-key ${functionName}/${commitID()}.zip \
+                    --region ${region}"
+
+            sh "aws lambda publish-version --function-name ${functionName} \
+                    --description ${commitID()} --region ${region}"
+        }
+    } catch(e){
         currentBuild.result = 'FAILED'
         throw e
     } finally {
         notifySlack(currentBuild.result)
+        sh "rm -rf ${commitID()}.zip"
     }
-
-
 }
 
 def notifySlack(String buildStatus){
@@ -98,4 +101,3 @@ def commitMessage() {
     sh 'rm .git/commitMessage'
     commitMessage
 }
-
