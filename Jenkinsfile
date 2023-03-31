@@ -10,7 +10,7 @@ node(''){
             notifySlack('STARTED')
         }
 
-        def imageTest= docker.build("${imageName}-test", "-f Dockerfile.test .")
+        // def imageTest= docker.build("${imageName}-test", "-f Dockerfile.test .")
 
         stage('Pre-integration Tests'){
             parallel(
