@@ -51,6 +51,11 @@ node(''){
                     --s3-bucket ${bucket} --s3-key ${functionName}/${commitID()}.zip \
                     --region ${region}"
 
+             timeout(time: 20, unit: 'SECONDS') {
+                            sh 'echo "TIMEOUT"'
+                            
+                        }
+
             sh "aws lambda publish-version --function-name ${functionName} \
                     --description ${commitID()} --region ${region}"
         }
